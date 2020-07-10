@@ -787,7 +787,7 @@ udp_tl_read_message (struct eXosip_t *excontext, fd_set * osip_fdset, fd_set * o
 #endif
       OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "Could not read socket (%i) (%i) (%s)\n", i, my_errno, strerror (my_errno)));
       if (errno == 0 || errno == 34) {
-        udp_message_max_length = udp_message_max_length * 2;
+        udp_message_max_length = SIP_MESSAGE_MAX_LENGTH * 2;
         osip_free (reserved->buf);
         reserved->buf = (char *) osip_malloc (udp_message_max_length * sizeof (char) + 1);
       }
@@ -846,7 +846,7 @@ udp_tl_read_message (struct eXosip_t *excontext, fd_set * osip_fdset, fd_set * o
 #endif
       OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "Could not read socket (%i) (%i) (%s)\n", i, my_errno, strerror (my_errno)));
       if (errno == 0 || errno == 34) {
-        udp_message_max_length = udp_message_max_length * 2;
+        udp_message_max_length = SIP_MESSAGE_MAX_LENGTH * 2;
         osip_free (reserved->buf);
         reserved->buf = (char *) osip_malloc (udp_message_max_length * sizeof (char) + 1);
       }
