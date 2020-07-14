@@ -1,6 +1,6 @@
 /*
   eXosip - This is the eXtended osip library.
-  Copyright (C) 2001-2015 Aymeric MOIZARD amoizard@antisip.com
+  Copyright (C) 2001-2020 Aymeric MOIZARD amoizard@antisip.com
   
   eXosip is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -326,7 +326,7 @@ eXosip_event_free (eXosip_event_t * je)
 }
 
 void
-_eXosip_report_event (struct eXosip_t *excontext, eXosip_event_t * je, osip_message_t * sip)
+_eXosip_report_event (struct eXosip_t *excontext, eXosip_event_t * je)
 {
   if (je != NULL) {
     _eXosip_event_add (excontext, je);
@@ -339,7 +339,7 @@ _eXosip_report_call_event (struct eXosip_t *excontext, int evt, eXosip_call_t * 
   eXosip_event_t *je;
 
   je = _eXosip_event_init_for_call (evt, jc, jd, tr);
-  _eXosip_report_event (excontext, je, NULL);
+  _eXosip_report_event (excontext, je);
 }
 
 int
@@ -377,6 +377,50 @@ eXosip_event_wait (struct eXosip_t * excontext, int tv_s, int tv_ms)
 
 #else
 
+#ifdef HAVE_SYS_EPOLL_H
+
+static eXosip_event_t *
+eXosip_event_wait_epoll (struct eXosip_t * excontext, int tv_s, int tv_ms)
+{
+  eXosip_event_t *je = NULL;
+  struct epoll_event ep_array;
+
+  int nfds = epoll_wait (excontext->epfdctl, &ep_array, 1, tv_s * 1000 + tv_ms);
+  if (nfds>0) {
+    char buf[500];
+
+    jpipe_read (excontext->j_socketctl_event, buf, 499);
+  }
+
+  eXosip_lock (excontext);
+  _eXosip_retransmit_lost200ok (excontext);
+  eXosip_unlock (excontext);
+
+  if (tv_s == 0 && tv_ms == 0)
+    return NULL;
+
+  nfds = epoll_wait (excontext->epfdctl, &ep_array, 1, tv_s * 1000 + tv_ms);
+  if (nfds <= 0)
+    return OSIP_SUCCESS;
+
+  if (excontext->j_stop_ua)
+    return NULL;
+
+  if (nfds>0) {
+    char buf[500];
+
+    jpipe_read (excontext->j_socketctl_event, buf, 499);
+  }
+
+  je = (eXosip_event_t *) osip_fifo_tryget (excontext->j_events);
+  if (je != NULL)
+    return je;
+
+  return je;
+}
+
+#endif
+
 eXosip_event_t *
 eXosip_event_wait (struct eXosip_t * excontext, int tv_s, int tv_ms)
 {
@@ -390,6 +434,16 @@ eXosip_event_wait (struct eXosip_t * excontext, int tv_s, int tv_ms)
     return NULL;
   }
 
+  je = (eXosip_event_t *) osip_fifo_tryget (excontext->j_events);
+  if (je != NULL)
+    return je;
+
+#ifdef HAVE_SYS_EPOLL_H
+  if (excontext->poll_method == EXOSIP_USE_EPOLL_LT) {
+    return eXosip_event_wait_epoll(excontext, tv_s, tv_ms);
+  }
+#endif
+
   FD_ZERO (&fdset);
 #if defined (WIN32) || defined (_WIN32_WCE)
   FD_SET ((unsigned int) jpipe_get_read_descr (excontext->j_socketctl_event), &fdset);
@@ -397,10 +451,6 @@ eXosip_event_wait (struct eXosip_t * excontext, int tv_s, int tv_ms)
   FD_SET (jpipe_get_read_descr (excontext->j_socketctl_event), &fdset);
 #endif
   max = jpipe_get_read_descr (excontext->j_socketctl_event);
-
-  je = (eXosip_event_t *) osip_fifo_tryget (excontext->j_events);
-  if (je != NULL)
-    return je;
 
   tv.tv_sec = 0;
   tv.tv_usec = 0;
@@ -453,14 +503,37 @@ eXosip_event_geteventsocket (struct eXosip_t *excontext)
   return jpipe_get_read_descr (excontext->j_socketctl_event);
 }
 
+#ifdef HAVE_SYS_EPOLL_H
+
+static eXosip_event_t *
+eXosip_event_get_epoll (struct eXosip_t * excontext)
+{
+  struct epoll_event ep_array;
+
+  int nfds = epoll_wait (excontext->epfdctl, &ep_array, 1, 0);
+  if (nfds>0) {
+    char buf[500];
+
+    jpipe_read (excontext->j_socketctl_event, buf, 499);
+  }
+  return (eXosip_event_t *) osip_fifo_get (excontext->j_events);
+}
+
+#endif
+
 eXosip_event_t *
 eXosip_event_get (struct eXosip_t * excontext)
 {
-  eXosip_event_t *je;
   fd_set fdset;
   struct timeval tv;
   int max;
 
+#ifdef HAVE_SYS_EPOLL_H
+  if (excontext->poll_method == EXOSIP_USE_EPOLL_LT) {
+    return eXosip_event_get_epoll(excontext);
+  }
+#endif
+  
   FD_ZERO (&fdset);
 #if defined (WIN32) || defined (_WIN32_WCE)
   FD_SET ((unsigned int) jpipe_get_read_descr (excontext->j_socketctl_event), &fdset);
@@ -478,8 +551,7 @@ eXosip_event_get (struct eXosip_t * excontext)
     jpipe_read (excontext->j_socketctl_event, buf, 499);
   }
 
-  je = (eXosip_event_t *) osip_fifo_get (excontext->j_events);
-  return je;
+  return (eXosip_event_t *) osip_fifo_get (excontext->j_events);
 }
 
 #endif

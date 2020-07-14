@@ -1,6 +1,6 @@
 /*
   eXosip - This is the eXtended osip library.
-  Copyright (C) 2001-2015 Aymeric MOIZARD amoizard@antisip.com
+  Copyright (C) 2001-2020 Aymeric MOIZARD amoizard@antisip.com
   
   eXosip is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -62,7 +62,7 @@ _eXosip_find_last_inc_subscribe (eXosip_notify_t * jn, eXosip_dialog_t * jd)
 
 
 osip_transaction_t *
-_eXosip_find_last_out_notify (eXosip_notify_t * jn, eXosip_dialog_t * jd)
+_eXosip_find_last_out_notify (eXosip_dialog_t * jd)
 {
   osip_transaction_t *out_tr;
 

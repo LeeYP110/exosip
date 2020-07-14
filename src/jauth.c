@@ -1,6 +1,6 @@
 /*
   eXosip - This is the eXtended osip library.
-  Copyright (C) 2001-2015 Aymeric MOIZARD amoizard@antisip.com
+  Copyright (C) 2001-2020 Aymeric MOIZARD amoizard@antisip.com
   
   eXosip is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -863,7 +863,7 @@ _eXosip_store_nonce (struct eXosip_t *excontext, const char *call_id, osip_proxy
     http_auth = &excontext->http_auths[pos];
     if (http_auth->pszCallId[0] == '\0') {
       snprintf (http_auth->pszCallId, sizeof (http_auth->pszCallId), "%s", call_id);
-      snprintf (http_auth->pszCNonce, sizeof (http_auth->pszCNonce), "0a4f113b");
+      memset(http_auth->pszCNonce, 0, sizeof(http_auth->pszCNonce));
       http_auth->iNonceCount = 1;
       osip_proxy_authenticate_clone (wa, &(http_auth->wa));
       http_auth->answer_code = answer_code;

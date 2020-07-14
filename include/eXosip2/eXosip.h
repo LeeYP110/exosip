@@ -1,6 +1,6 @@
 /*
   eXosip - This is the eXtended osip library.
-  Copyright (C) 2001-2015 Aymeric MOIZARD amoizard@antisip.com
+  Copyright (C) 2001-2020 Aymeric MOIZARD amoizard@antisip.com
   
   eXosip is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -166,12 +166,31 @@ extern "C" {
 #endif
 
 /**
- * Generate random string:
+ * Generate random string: (only digit, and maximum unsigned int)
  *
  * @param buf	        destination buffer for random string.
  * @param buf_size      size of destination buffer
  */
   int eXosip_generate_random (char *buf, int buf_size);
+
+  /**
+   * Generate random string: (low entropy, only hexa)
+   *
+   * @param buf	        destination buffer for random string.
+   * @param buf_size    size of destination buffer
+   * @param str1        random1 input string
+   * @param str2        random2 input string
+   * @param str3        random3 input string
+   */
+  int eXosip_hexa_generate_random(char *buf, int buf_size, char *str1, char *str2, char *str3);
+
+  /**
+   * Generate random string: (high entropy when compiled with openssl)
+   *
+   * @param buf	        destination buffer for random string.
+   * @param buf_size    size of destination buffer
+   */
+  int eXosip_byte_generate_random(char *val, int val_size);
 
 /** @} */
 

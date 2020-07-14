@@ -1,6 +1,6 @@
 /*
   eXosip - This is the eXtended osip library.
-  Copyright (C) 2001-2015 Aymeric MOIZARD amoizard@antisip.com
+  Copyright (C) 2001-2020 Aymeric MOIZARD amoizard@antisip.com
   
   eXosip is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -40,6 +40,12 @@
 #include <windows.h>
 #endif
 
+#ifdef HAVE_OPENSSL_SSL_H
+#include <openssl/rand.h>
+#endif
+
+#include <osipparser2/osip_md5.h>
+
 /* Private functions */
 static int dialog_fill_route_set (osip_dialog_t * dialog, osip_message_t * request);
 
@@ -66,6 +72,46 @@ eXosip_generate_random (char *buf, int buf_size)
 
   snprintf (buf, buf_size, "%u", number);
   return OSIP_SUCCESS;
+}
+
+/* TAKEN from rcf2617.txt */
+#define HASHLEN 16
+typedef char HASH[HASHLEN];
+
+#define HASHHEXLEN 32
+typedef char HASHHEX[HASHHEXLEN + 1];
+
+void CvtHex(HASH Bin, HASHHEX Hex);
+
+int
+eXosip_hexa_generate_random(char *val, int val_size, char *str1, char *str2, char *str3)
+{
+  osip_MD5_CTX Md5Ctx;
+  HASH HA1;
+  HASHHEX Key;
+  
+  osip_MD5Init(&Md5Ctx);
+  osip_MD5Update(&Md5Ctx, (unsigned char *)str1, (unsigned int)strlen(str1));
+  osip_MD5Update(&Md5Ctx, (unsigned char *) ":", 1);
+  osip_MD5Update(&Md5Ctx, (unsigned char *)str2, (unsigned int)strlen(str2));
+  osip_MD5Update(&Md5Ctx, (unsigned char *) ":", 1);
+  osip_MD5Update(&Md5Ctx, (unsigned char *)str3, (unsigned int)strlen(str3));
+  osip_MD5Final((unsigned char *)HA1, &Md5Ctx);
+  CvtHex(HA1, Key);
+  osip_strncpy(val, Key, val_size - 1);
+  return 0;
+}
+
+int
+eXosip_byte_generate_random(char *val, int val_size)
+{
+#ifdef HAVE_OPENSSL_SSL_H
+  return RAND_bytes((unsigned char *)val, val_size) > 0 ? 0 : -1;
+#else
+  eXosip_generate_random(val, 16);
+  eXosip_hexa_generate_random(val, val_size, val, "key", "crypto");
+  return 0;
+#endif
 }
 
 int
@@ -901,7 +947,7 @@ _eXosip_generating_cancel (struct eXosip_t *excontext, osip_message_t ** dest, o
 }
 
 int
-_eXosip_request_viamanager (struct eXosip_t *excontext, osip_transaction_t * tr, osip_message_t * sip, int family, int proto, struct sockaddr_storage *udp_local_bind, int ephemeral_port, int tcp_sock, char *host)
+_eXosip_request_viamanager (struct eXosip_t *excontext, osip_message_t * sip, int family, int proto, struct sockaddr_storage *udp_local_bind, int ephemeral_port, int tcp_sock, char *host)
 {
   /* step1: put local-ip in VIA->host or udp_firewall_ip set by eXosip_masquerade_contact (tl_get_masquerade_contact) */
   /* step2: put local-port in VIA->port or udp_firewall_port set by eXosip_masquerade_contact (tl_get_masquerade_contact) */
@@ -986,7 +1032,7 @@ _eXosip_request_viamanager (struct eXosip_t *excontext, osip_transaction_t * tr,
 }
 
 int
-_eXosip_message_contactmanager (struct eXosip_t *excontext, osip_transaction_t * tr, osip_message_t * sip, int family, int proto, struct sockaddr_storage *udp_local_bind, int ephemeral_port, int sock, char *host)
+_eXosip_message_contactmanager (struct eXosip_t *excontext, osip_message_t * sip, int family, int proto, struct sockaddr_storage *udp_local_bind, int ephemeral_port, int sock, char *host)
 {
   /* step1: put local-ip in Contact ->host or udp_firewall_ip set by eXosip_masquerade_contact (_eXosip_register_add_contact) */
   /* step2: put local-port in Contact->port or udp_firewall_port set by eXosip_masquerade_contact (_eXosip_register_add_contact) */

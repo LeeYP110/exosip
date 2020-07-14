@@ -1,6 +1,6 @@
 /*
   eXosip - This is the eXtended osip library.
-  Copyright (C) 2001-2015 Aymeric MOIZARD amoizard@antisip.com
+  Copyright (C) 2001-2020 Aymeric MOIZARD amoizard@antisip.com
   
   eXosip is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -280,6 +280,15 @@ eXosip_quit (struct eXosip_t *excontext)
   _eXosip_counters_free (&excontext->average_publications);
   _eXosip_counters_free (&excontext->average_subscriptions);
   _eXosip_counters_free (&excontext->average_insubscriptions);
+
+#ifdef HAVE_SYS_EPOLL_H
+  if (excontext->ep_array != NULL)
+    osip_free (excontext->ep_array);
+  if (excontext->epfd > 0)
+    _eXosip_closesocket (excontext->epfd);
+  if (excontext->epfdctl > 0)
+    _eXosip_closesocket (excontext->epfdctl);
+#endif
 
   memset (excontext, 0, sizeof (eXosip_t));
   excontext->j_stop_ua = -1;
@@ -760,6 +769,55 @@ eXosip_init (struct eXosip_t *excontext)
   excontext->masquerade_via = 0;
   excontext->use_ephemeral_port = 1;
 
+  excontext->poll_method = EXOSIP_USE_SELECT;
+#ifdef HAVE_SYS_EPOLL_H
+  excontext->max_fd_no = EXOSIP_MAX_DESCRIPTOR;
+  excontext->epfd = epoll_create (excontext->max_fd_no);
+  if (excontext->epfd > 0)
+    excontext->ep_array = (struct epoll_event*) osip_malloc(sizeof(struct epoll_event)*excontext->max_fd_no);
+
+#ifndef OSIP_MONOTHREAD
+  if (excontext->ep_array != NULL) {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(struct epoll_event));
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = jpipe_get_read_descr (excontext->j_socketctl);
+    i=epoll_ctl(excontext->epfd, EPOLL_CTL_ADD, jpipe_get_read_descr (excontext->j_socketctl), &ev);
+    if (i<0) {
+      return OSIP_UNDEFINED_ERROR;
+    }
+  }
+#endif
+  if (excontext->ep_array != NULL && i == 0)
+    excontext->poll_method = EXOSIP_USE_EPOLL_LT;
+  else {
+    /* if epoll failed, just switch back to "select" */
+    if (excontext->ep_array != NULL)
+      osip_free (excontext->ep_array);
+    excontext->ep_array = NULL;
+    if (excontext->epfd > 0)
+      _eXosip_closesocket (excontext->epfd);
+    excontext->epfd = 0;
+  }
+
+  if (excontext->poll_method == EXOSIP_USE_EPOLL_LT) {
+    struct epoll_event ev;
+    excontext->epfdctl = epoll_create (1);
+    if (excontext->epfdctl < 0) {
+      return OSIP_UNDEFINED_ERROR;
+    }
+    
+    memset(&ev, 0, sizeof(struct epoll_event));
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = jpipe_get_read_descr (excontext->j_socketctl_event);
+    i = epoll_ctl(excontext->epfdctl, EPOLL_CTL_ADD, jpipe_get_read_descr (excontext->j_socketctl_event), &ev);
+    if (i<0) {
+      _eXosip_closesocket (excontext->epfdctl);
+      return OSIP_UNDEFINED_ERROR;
+    }
+  }
+#endif
+  
   return OSIP_SUCCESS;
 }
 
@@ -1112,11 +1170,9 @@ eXosip_set_option (struct eXosip_t *excontext, int opt, const void *value)
     }
     break;
   case EXOSIP_OPT_SET_TLS_CLIENT_CERTIFICATE_NAME:
-    eXosip_tls_use_client_certificate (excontext, (const char *) value);
-    break;
+    return OSIP_UNDEFINED_ERROR; /* obsolete */
   case EXOSIP_OPT_SET_TLS_SERVER_CERTIFICATE_NAME:
-    eXosip_tls_use_server_certificate (excontext, (const char *) value);
-    break;
+    return OSIP_UNDEFINED_ERROR; /* obsolete */
   case EXOSIP_OPT_SET_TSC_SERVER:
 #ifdef TSC_SUPPORT
     excontext->tunnel_handle = (void *) value;
@@ -1189,6 +1245,7 @@ eXosip_set_option (struct eXosip_t *excontext, int opt, const void *value)
       excontext->statistics.average_subscriptions = excontext->average_subscriptions.current_average;
       excontext->statistics.average_insubscriptions = excontext->average_insubscriptions.current_average;
       memcpy (stats, &excontext->statistics, sizeof (struct eXosip_stats));
+      break;
     }
   default:
     return OSIP_BADPARAMETER;

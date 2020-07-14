@@ -1,6 +1,6 @@
 /*
   eXosip - This is the eXtended osip library.
-  Copyright (C) 2001-2015 Aymeric MOIZARD amoizard@antisip.com
+  Copyright (C) 2001-2020 Aymeric MOIZARD amoizard@antisip.com
   
   eXosip is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -547,7 +547,7 @@ _eXosip_get_addrinfo (struct eXosip_t *excontext, struct addrinfo **addrinfo, co
 #endif
 
 int
-_eXosip_getport (const struct sockaddr *sa, socklen_t salen)
+_eXosip_getport (const struct sockaddr *sa)
 {
   if (sa->sa_family == AF_INET)
     return ntohs (((struct sockaddr_in *) sa)->sin_port);
@@ -776,7 +776,7 @@ _eXosip_default_gateway_with_getifaddrs (int type, char *address, int size)
  * The ip of the default interface is returned.
  */
 static int
-_eXosip_default_gateway_ipv4 (struct eXosip_t *excontext, char *destination, char *address, int size)
+_eXosip_default_gateway_ipv4 (char *destination, char *address, int size)
 {
   socklen_t len;
   int sock_rt, on = 1;
@@ -833,7 +833,7 @@ _eXosip_default_gateway_ipv4 (struct eXosip_t *excontext, char *destination, cha
  * The ip of the default interface is returned.
  */
 static int
-_eXosip_default_gateway_ipv6 (struct eXosip_t *excontext, char *destination, char *address, int size)
+_eXosip_default_gateway_ipv6 (char *destination, char *address, int size)
 {
   socklen_t len;
   int sock_rt, on = 1;
@@ -884,10 +884,10 @@ _eXosip_guess_ip_for_destination (struct eXosip_t *excontext, int family, char *
   int err;
 
   if (family == AF_INET6) {
-    err = _eXosip_default_gateway_ipv6 (excontext, destination, address, size);
+    err = _eXosip_default_gateway_ipv6 (destination, address, size);
   }
   else {
-    err = _eXosip_default_gateway_ipv4 (excontext, destination, address, size);
+    err = _eXosip_default_gateway_ipv4 (destination, address, size);
   }
 #ifdef HAVE_GETIFADDRS
   if (err < 0)
@@ -900,7 +900,7 @@ _eXosip_guess_ip_for_destination (struct eXosip_t *excontext, int family, char *
  * The ip of the default interface is returned.
  */
 static int
-_eXosip_default_gateway_ipv4sock (struct eXosip_t *excontext, int proto, struct sockaddr_storage *udp_local_bind, int sock, char *destination, char *address, int size)
+_eXosip_default_gateway_ipv4sock (int proto, struct sockaddr_storage *udp_local_bind, int sock, char *destination, char *address, int size)
 {
   socklen_t len;
   struct sockaddr_in iface_out;
@@ -966,7 +966,7 @@ _eXosip_default_gateway_ipv4sock (struct eXosip_t *excontext, int proto, struct 
  * The ip of the default interface is returned.
  */
 static int
-_eXosip_default_gateway_ipv6sock (struct eXosip_t *excontext, int proto, struct sockaddr_storage *udp_local_bind, int sock, char *destination, char *address, int size)
+_eXosip_default_gateway_ipv6sock (int proto, struct sockaddr_storage *udp_local_bind, int sock, char *destination, char *address, int size)
 {
   socklen_t len;
   struct sockaddr_in6 iface_out;
@@ -1028,10 +1028,10 @@ _eXosip_guess_ip_for_destinationsock (struct eXosip_t *excontext, int family, in
   int err;
 
   if (family == AF_INET6) {
-    err = _eXosip_default_gateway_ipv6sock (excontext, proto, udp_local_bind, sock, destination, address, size);
+    err = _eXosip_default_gateway_ipv6sock (proto, udp_local_bind, sock, destination, address, size);
   }
   else {
-    err = _eXosip_default_gateway_ipv4sock (excontext, proto, udp_local_bind, sock, destination, address, size);
+    err = _eXosip_default_gateway_ipv4sock (proto, udp_local_bind, sock, destination, address, size);
   }
 #ifdef HAVE_GETIFADDRS
   if (err < 0)
@@ -2111,6 +2111,110 @@ _naptr_callback (void *arg, int status, int timeouts, unsigned char *abuf, int a
   }
 }
 
+#ifdef HAVE_SYS_EPOLL_H
+
+static int
+eXosip_dnsutils_cares_process (struct osip_naptr *output_record, ares_channel channel)
+{
+  ares_socket_t socks[16] = {ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+			    ARES_SOCKET_BAD,
+  };
+
+  int bitmask = ares_getsock (channel, socks, 16);
+  if (bitmask != 0) {
+    int num;
+    int nfds;
+    int epfd;
+    int n;
+    struct epoll_event ep_array[16];
+    
+    epfd = epoll_create (16);
+    if (epfd < 0) {
+      output_record->arg = NULL;
+      ares_destroy (channel);
+      return OSIP_UNDEFINED_ERROR;
+    }
+    
+    for (num=0;num<ARES_GETSOCK_MAXNUM;num++) {
+      struct epoll_event ev;
+
+      memset(&ev, 0, sizeof(struct epoll_event));
+      if (socks[num]==ARES_SOCKET_BAD)
+	continue;
+      
+      ev.events = EPOLLIN | EPOLLET;
+      if (ARES_GETSOCK_READABLE(bitmask, num)) {
+	ev.events |= EPOLLIN;
+      } else if (ARES_GETSOCK_WRITABLE(bitmask, num)) {
+	ev.events |= EPOLLOUT;
+      }
+      ev.data.fd = socks[num];
+      epoll_ctl(epfd, EPOLL_CTL_ADD, socks[num], &ev);
+    }
+    nfds = epoll_wait (epfd, ep_array, 16, 0);
+    if (nfds < 0 && SOCKERRNO != EINVAL) {
+      output_record->arg = NULL;
+      ares_destroy (channel);
+      return OSIP_UNDEFINED_ERROR;
+    }
+
+    for (n = 0; n < nfds; ++n) {
+      ares_process_fd(channel, ep_array[n].data.fd, ep_array[n].data.fd);
+    }
+
+    bitmask = ares_getsock (channel, socks, 16);
+  }
+  return bitmask;
+}
+
+#else
+
+static int
+eXosip_dnsutils_cares_process (struct osip_naptr *output_record, ares_channel channel)
+{
+  fd_set read_fds, write_fds;
+  struct timeval *tvp, tv;
+  int nfds;
+  int count;
+
+  FD_ZERO (&read_fds);
+  FD_ZERO (&write_fds);
+  nfds = ares_fds (channel, &read_fds, &write_fds);
+  if (nfds != 0) {
+    tvp = ares_timeout (channel, NULL, &tv);
+    tvp->tv_sec = 0;
+    tvp->tv_usec = 0;
+    count = select (nfds, &read_fds, &write_fds, NULL, tvp);
+    if (count < 0 && SOCKERRNO != EINVAL) {
+      output_record->arg = NULL;
+      ares_destroy (channel);
+      return OSIP_UNDEFINED_ERROR;
+    }
+    ares_process (channel, &read_fds, &write_fds);
+
+    FD_ZERO (&read_fds);
+    FD_ZERO (&write_fds);
+    nfds = ares_fds (channel, &read_fds, &write_fds);
+  }
+  return nfds;
+}
+
+#endif
+
 static int
 eXosip_dnsutils_srv_lookup (struct osip_naptr *output_record, const char *dnsserver)
 {
@@ -2125,31 +2229,13 @@ eXosip_dnsutils_srv_lookup (struct osip_naptr *output_record, const char *dnsser
 
     channel = output_record->arg;
     {
-      fd_set read_fds, write_fds;
-      struct timeval *tvp, tv;
       int nfds;
-      int count;
 
-      FD_ZERO (&read_fds);
-      FD_ZERO (&write_fds);
-      nfds = ares_fds (channel, &read_fds, &write_fds);
-      if (nfds != 0) {
-        tvp = ares_timeout (channel, NULL, &tv);
-        tvp->tv_sec = 0;
-        tvp->tv_usec = 0;
-        count = select (nfds, &read_fds, &write_fds, NULL, tvp);
-        if (count < 0 && SOCKERRNO != EINVAL) {
-          OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_INFO2, NULL, "eXosip_dnsutils_srv_lookup: select failed ('%s SRV')\n", output_record->domain));
-          output_record->naptr_state = OSIP_NAPTR_STATE_RETRYLATER;
-          output_record->arg = NULL;
-          ares_destroy (channel);
-          return OSIP_UNDEFINED_ERROR;
-        }
-        ares_process (channel, &read_fds, &write_fds);
-
-        FD_ZERO (&read_fds);
-        FD_ZERO (&write_fds);
-        nfds = ares_fds (channel, &read_fds, &write_fds);
+      nfds = eXosip_dnsutils_cares_process (output_record, channel);
+      if (nfds < 0) {
+        OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "eXosip_dnsutils_srv_lookup: select failed ('%s SRV')\n", output_record->domain));
+        output_record->naptr_state = OSIP_NAPTR_STATE_RETRYLATER;
+        return OSIP_UNDEFINED_ERROR;
       }
 
       if (nfds == 0) {
@@ -2245,31 +2331,13 @@ eXosip_dnsutils_srv_lookup (struct osip_naptr *output_record, const char *dnsser
   }
 
   {
-    fd_set read_fds, write_fds;
-    struct timeval *tvp, tv;
     int nfds;
-    int count;
 
-    FD_ZERO (&read_fds);
-    FD_ZERO (&write_fds);
-    nfds = ares_fds (channel, &read_fds, &write_fds);
-    if (nfds != 0) {
-      tvp = ares_timeout (channel, NULL, &tv);
-      tvp->tv_sec = 0;
-      tvp->tv_usec = 0;
-      count = select (nfds, &read_fds, &write_fds, NULL, tvp);
-      if (count < 0 && SOCKERRNO != EINVAL) {
-        OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "eXosip_dnsutils_srv_lookup: select failed ('%s SRV')\n", output_record->domain));
-        output_record->naptr_state = OSIP_NAPTR_STATE_RETRYLATER;
-        output_record->arg = NULL;
-        ares_destroy (channel);
-        return OSIP_UNDEFINED_ERROR;
-      }
-      ares_process (channel, &read_fds, &write_fds);
-
-      FD_ZERO (&read_fds);
-      FD_ZERO (&write_fds);
-      nfds = ares_fds (channel, &read_fds, &write_fds);
+    nfds = eXosip_dnsutils_cares_process (output_record, channel);
+    if (nfds < 0) {
+      OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "eXosip_dnsutils_srv_lookup: select failed ('%s SRV')\n", output_record->domain));
+      output_record->naptr_state = OSIP_NAPTR_STATE_RETRYLATER;
+      return OSIP_UNDEFINED_ERROR;
     }
 
     if (nfds == 0) {
@@ -2349,32 +2417,15 @@ eXosip_dnsutils_naptr_lookup (osip_naptr_t * output_record, const char *domain, 
   OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_INFO2, NULL, "eXosip_dnsutils_naptr_lookup: About to ask for '%s NAPTR'\n", domain));
 
   {
-    fd_set read_fds, write_fds;
-    struct timeval *tvp, tv;
     int nfds;
-    int count;
 
-    FD_ZERO (&read_fds);
-    FD_ZERO (&write_fds);
-    nfds = ares_fds (channel, &read_fds, &write_fds);
-    if (nfds != 0) {
-      tvp = ares_timeout (channel, NULL, &tv);
-      tvp->tv_sec = 0;
-      tvp->tv_usec = 0;
-      count = select (nfds, &read_fds, &write_fds, NULL, tvp);
-      if (count < 0 && SOCKERRNO != EINVAL) {
-        OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "eXosip_dnsutils_naptr_lookup: select failed ('%s NAPTR')\n", domain));
-        output_record->arg = NULL;
-        ares_destroy (channel);
-        output_record->naptr_state = OSIP_NAPTR_STATE_RETRYLATER;
-        return OSIP_UNDEFINED_ERROR;
-      }
-      ares_process (channel, &read_fds, &write_fds);
-
-      FD_ZERO (&read_fds);
-      FD_ZERO (&write_fds);
-      nfds = ares_fds (channel, &read_fds, &write_fds);
+    nfds = eXosip_dnsutils_cares_process (output_record, channel);
+    if (nfds < 0) {
+      OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "eXosip_dnsutils_naptr_lookup: select failed ('%s NAPTR')\n", domain));
+      output_record->naptr_state = OSIP_NAPTR_STATE_RETRYLATER;
+      return OSIP_UNDEFINED_ERROR;
     }
+
     if (nfds == 0) {
       if (output_record->naptr_state != OSIP_NAPTR_STATE_NAPTRDONE) {
         /* don't need channel any more */
@@ -2451,7 +2502,7 @@ eXosip_dnsutils_naptr (struct eXosip_t *excontext, const char *_domain, const ch
     snprintf (domain + idx_domain, delim_aus - _domain, "%s", _domain);
   }
   else if (delim_aus != NULL && delim_aus[1] == '\0') {
-    snprintf (domain, delim_aus - _domain, "%s", _domain);
+    snprintf (domain, delim_aus - _domain + 1, "%s", _domain);
   }
   else {
     delim_aus = NULL;
@@ -2632,31 +2683,14 @@ eXosip_dnsutils_dns_process (osip_naptr_t * naptr_record, int force)
 
   /* in "keep_in_cache" use-case (REGISTER), we delayed completion. */
   for (;;) {
-    fd_set read_fds, write_fds;
-    struct timeval *tvp, tv;
     int nfds;
-    int count;
 
-    FD_ZERO (&read_fds);
-    FD_ZERO (&write_fds);
-    nfds = ares_fds (channel, &read_fds, &write_fds);
-    if (nfds != 0) {
-      tvp = ares_timeout (channel, NULL, &tv);
-      tvp->tv_sec = 0;
-      tvp->tv_usec = 0;
-      count = select (nfds, &read_fds, &write_fds, NULL, tvp);
-      if (count < 0 && SOCKERRNO != EINVAL) {
-        OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_INFO2, NULL, "eXosip_dnsutils_dns_process: select failed ('%s')\n", naptr_record->domain));
-        ares_destroy (channel);
-        naptr_record->arg = NULL;
-        return OSIP_UNDEFINED_ERROR;
-      }
-      ares_process (channel, &read_fds, &write_fds);
-
-      FD_ZERO (&read_fds);
-      FD_ZERO (&write_fds);
-      nfds = ares_fds (channel, &read_fds, &write_fds);
+    nfds = eXosip_dnsutils_cares_process (naptr_record, channel);
+    if (nfds < 0) {
+      OSIP_TRACE (osip_trace (__FILE__, __LINE__, OSIP_ERROR, NULL, "eXosip_dnsutils_srv_lookup: select failed ('%s')\n", naptr_record->domain));
+      return OSIP_UNDEFINED_ERROR;
     }
+
     if (nfds == 0) {
       if (naptr_record->naptr_state == OSIP_NAPTR_STATE_NAPTRDONE || naptr_record->naptr_state == OSIP_NAPTR_STATE_SRVINPROGRESS) {
         /* missing SRV */
@@ -3155,7 +3189,7 @@ eXosip_dnsutils_naptr (struct eXosip_t *excontext, const char *_domain, const ch
     snprintf (domain + idx_domain, delim_aus - _domain, "%s", _domain);
   }
   else if (delim_aus != NULL && delim_aus[1] == '\0') {
-    snprintf (domain, delim_aus - _domain, "%s", _domain);
+    snprintf (domain, delim_aus - _domain + 1, "%s", _domain);
   }
   else {
     snprintf (domain, sizeof (domain), "%s", _domain);
@@ -3839,7 +3873,7 @@ eXosip_dnsutils_naptr (struct eXosip_t *excontext, const char *_domain, const ch
     snprintf (domain + idx_domain, delim_aus - _domain, "%s", _domain);
   }
   else if (delim_aus != NULL && delim_aus[1] == '\0') {
-    snprintf (domain, delim_aus - _domain, "%s", _domain);
+    snprintf (domain, delim_aus - _domain + 1, "%s", _domain);
   }
   else {
     delim_aus = NULL;
