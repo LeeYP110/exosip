@@ -43,6 +43,7 @@
 
 #if !defined(_WIN32_WCE)
 #include <errno.h>
+#define ENABLE_MAIN_SOCKET 1
 #endif
 
 #if defined(HAVE_NETINET_TCP_H)
